@@ -273,8 +273,6 @@ void setup()
             { request->send_P(200, "text/plain", temperatureC.c_str()); });
   server.on("/temperaturef", HTTP_GET, [](AsyncWebServerRequest *request)
             { request->send_P(200, "text/plain", temperatureF.c_str()); });
-
-  server.on("/Output1", HTTP_POST, 
       // Start server
       server.begin();
 }
