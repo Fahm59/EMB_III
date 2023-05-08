@@ -1,293 +1,171 @@
-#include <Arduino.h>
-/*********
-  Rui Santos
-  Complete project details at https://RandomNerdTutorials.com
-*********/
-
-// Import required libraries
 #ifdef ESP32
-#include <WiFi.h>
-#include <ESPAsyncWebServer.h>
+  #include <WiFi.h>
+  #include <AsyncTCP.h>
 #else
-#include <Arduino.h>
-#include <ESP8266WiFi.h>
-#include <Hash.h>
-#include <ESPAsyncTCP.h>
-#include <ESPAsyncWebServer.h>
+  #include <ESP8266WiFi.h>
+  #include <ESPAsyncTCP.h>
 #endif
+#include <ESPAsyncWebServer.h>
+#include <Wire.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
-// Data wire is connected to GPIO 25
-#define ONE_WIRE_BUS 25
+// REPLACE WITH YOUR NETWORK CREDENTIALS
+const char* ssid = "E308";
+const char* password = "98806829";
 
-// Setup a oneWire instance to communicate with any OneWire devices
-OneWire oneWire(ONE_WIRE_BUS);
+// Default Threshold Temperature Value
+String inputMessage = "25.0";
+String lastTemperature;
+String enableArmChecked = "checked";
+String inputMessage2 = "true";
+String comfortMessage = "25.0";
 
-// Pass our oneWire reference to Dallas Temperature sensor
-DallasTemperature sensors(&oneWire);
+// HTML web page to handle 2 input fields (threshold_input, enable_arm_input)
+const char index_html[] PROGMEM = R"rawliteral(
+<!DOCTYPE HTML><html><head>
+  <title>Temperature Threshold Output Control</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  </head><body>
+  <h2>DS18B20 Temperature</h2> 
+  <h3>%TEMPERATURE% &deg;C</h3>
+  <h2>ESP Arm Trigger</h2>
+  <form action="/get">
+    Power-Saving Temperature <input type="number" step="0.1" name="PS_INPUT"  required><br>
+    
+    <input type="submit" value="Submit">
+  </form>
+    <form action="/get">
+    Comfort Temperature<input type="number" step="0.1" name="COMFORT_INPUT"  required><br>
+    
+    <input type="submit" value="Submit">
+  </form>
+</body></html>)rawliteral";
 
-// Variables to store temperature values
-String temperatureF = "";
-String temperatureC = "";
+void notFound(AsyncWebServerRequest *request) {
+  request->send(404, "text/plain", "Not found");
+}
 
-int inputComfort = 0;
-int inputPS = 0;
-
-// Timer variables
-unsigned long lastTime = 0;
-unsigned long timerDelay = 1000;
-
-// Replace with your network credentials
-const char *ssid = "E308";
-const char *password = "98806829";
-
-// Create AsyncWebServer object on port 80
 AsyncWebServer server(80);
 
-String readDSTemperatureC()
-{
-  // Call sensors.requestTemperatures() to issue a global temperature and Requests to all devices on the bus
-  sensors.requestTemperatures();
-  float tempC = sensors.getTempCByIndex(0);
-
-  if (tempC == -127.00)
-  {
-    Serial.println("Failed to read from DS18B20 sensor");
-    return "--";
-  }
-  else
-  {
-    Serial.print("Temperature Celsius: ");
-    Serial.println(tempC);
-  }
-  return String(tempC);
-}
-
-String readDSTemperatureF()
-{
-  // Call sensors.requestTemperatures() to issue a global temperature and Requests to all devices on the bus
-  sensors.requestTemperatures();
-  float tempF = sensors.getTempFByIndex(0);
-
-  if (int(tempF) == -196)
-  {
-    Serial.println("Failed to read from DS18B20 sensor");
-    return "--";
-  }
-  else
-  {
-    Serial.print("Temperature Fahrenheit: ");
-    Serial.println(tempF);
-  }
-  return String(tempF);
-}
-
-const char index_html[] PROGMEM = R"rawliteral(
-<!DOCTYPE HTML><html>
-<head>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.7.2/css/all.css" integrity="sha384-fnmOCqbTlWIlj8LyTjo7mOUStjsKC4pOpQbqyi7RrhN7udi9RwhKkMHpvLbHG9Sr" crossorigin="anonymous">
-  <style>
-    html {
-     font-family: Arial;
-     display: inline-block;
-     margin: 0px auto;
-     text-align: center;
-    }
-    h2 { font-size: 3.0rem; }
-    p { font-size: 3.0rem; }
-    .units { font-size: 1.2rem; }
-    .ds-labels{
-      font-size: 1.5rem;
-      vertical-align:middle;
-      padding-bottom: 15px;
-    }
-  </style>
-</head>
-<body>
-  <h2>ESP DS18B20 Server</h2>
-  <p>
-    <i class="fas fa-thermometer-half" style="color:#059e8a;"></i> 
-    <span class="ds-labels">Temperature Celsius</span> 
-    <span id="temperaturec">%TEMPERATUREC%</span>
-    <sup class="units">&deg;C</sup>
-  </p>
-  <p>
-    <i class="fas fa-thermometer-half" style="color:#059e8a;"></i> 
-    <span class="ds-labels">Temperature Fahrenheit</span>
-    <span id="temperaturef">%TEMPERATUREF%</span>
-    <sup class="units">&deg;F</sup>
-  </p>
-
-
- <label for=input1>
-  Comfort:
- </label>
-  <br>
-  <input type="number" id="input1" min="0"><br>
-  
-   %inputComfort%
-
-  <br>
-  <label>
-  Power-Saving: 
-  </label>
-  <br>
-  <input type="number" id="input2" min="0">
-  %inputPS%
-
-  <br>
-  <br>
-
-  <button onclick="sendData()">Send</button>
-
- <br>
- <br>
-
-  <label>Output1</label>
-  <input type="number" id="Output1" readonly>
-
-<br>
-<br>
-
-  <label>Output2</label>
-  <input type="number" id="Output2" readonly>
-
-</body>
-<script>
-setInterval(function ( ) {
-  var xhttp = new XMLHttpRequest();
-  xhttp.onreadystatechange = function() {
-    if (this.readyState == 4 && this.status == 200) {
-      document.getElementById("temperaturec").innerHTML = this.responseText;
-    }
-  };
-  xhttp.open("GET", "/temperaturec", true);
-  xhttp.send();
-}, 10000) ;
-setInterval(function ( ) {
-  var xhttp = new XMLHttpRequest();
-  xhttp.onreadystatechange = function() {
-    if (this.readyState == 4 && this.status == 200) {
-      document.getElementById("temperaturef").innerHTML = this.responseText;
-    }
-  };
-  xhttp.open("GET", "/temperaturef", true);
-  xhttp.send();
-}, 10000) ;
-
-
-function sendData(){
-  inputComfort = document.getElementById("input1")
-  inputPS = document.getElementById("input2")
-
-  if (inputComfort.value > 0){
-      sendComfort();
-  }
-  else
-  {
-  alert("The Comfort field is empty")
-  }
-
-  if(inputPS.value > 0){
-    sendPS();
-  }
-  else{
-    alert("The PowerSaving field is empty")
-  }
-}
-
-function sendComfort() {
-  const xhr = new XMLHttpRequest();
-  xhr.onreadystatechange = function() {
-    if(this.readystate === 4 && this.status === 200){
-      document.getElementById("Output1").value = this.responseText;
-    }
-  };
-  xhr.open("POST", "text/html", index_html);
-  xhr.setRequestHeader("Content-type", "application/x-www-form-urlencoded");
-  const data = "Outpu1=" + encodeURIComponent(document.getElementById("Output2").value);
-  xhr.send(data);
-}
-
-function sendPS() {
-  const xhr = new XMLHttpRequest();
-  xhr.onreadystatechange = function() {
-    if (this.readyState === 4 && this.status === 200) {
-      document.getElementById("Output2").value = this.responseText;
-    }
-  };
-  xhr.open("POST", "text/html", index_html);
-  xhr.setRequestHeader("Content-type", "application/x-www-form-urlencoded");
-  const data = "Output2=" + encodeURIComponent(document.getElementById("Output2").value);
-  xhr.send(data);
-}
-</script>
-</html>)rawliteral";
-
 // Replaces placeholder with DS18B20 values
-String processor(const String &var)
-{
-  // Serial.println(var);
-  if (var == "TEMPERATUREC")
-  {
-    return temperatureC;
+String processor(const String& var){
+  //Serial.println(var);
+  if(var == "TEMPERATURE"){
+    return lastTemperature;
   }
-  else if (var == "TEMPERATUREF")
-  {
-    return temperatureF;
+  else if(var == "THRESHOLD"){
+    return inputMessage;
+  }
+  else if(var == "ENABLE_ARM_INPUT"){
+    return enableArmChecked;
   }
   return String();
 }
 
-void setup()
-{
-  // Serial port for debugging purposes
+// Flag variable to keep track if triggers was activated or not
+bool triggerActive = false;
+String inputParam;
+
+const char* Ps_input = "PS_INPUT";
+const char* Comfort_Input = "COMFORT_INPUT";
+
+// Interval between sensor readings. Learn more about ESP32 timers: https://RandomNerdTutorials.com/esp32-pir-motion-sensor-interrupts-timers/
+unsigned long previousMillis = 0;     
+const long interval = 5000;    
+
+// GPIO where the output is connected to
+const int output = 2;
+
+// GPIO where the DS18B20 is connected to
+const int oneWireBus = 25;     
+// Setup a oneWire instance to communicate with any OneWire devices
+OneWire oneWire(oneWireBus);
+// Pass our oneWire reference to Dallas Temperature sensor 
+DallasTemperature sensors(&oneWire);
+
+void setup() {
   Serial.begin(115200);
-  Serial.println();
-
-  // Start up the DS18B20 library
-  sensors.begin();
-
-  temperatureC = readDSTemperatureC();
-  temperatureF = readDSTemperatureF();
-
-  // Connect to Wi-Fi
+  WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
-  Serial.println("Connecting to WiFi");
-  while (WiFi.status() != WL_CONNECTED)
-  {
-    delay(500);
-    Serial.print(".");
+  if (WiFi.waitForConnectResult() != WL_CONNECTED) {
+    Serial.println("WiFi Failed!");
+    return;
   }
   Serial.println();
-
-  // Print ESP Local IP Address
+  Serial.print("ESP IP Address: http://");
   Serial.println(WiFi.localIP());
+  
+  pinMode(output, OUTPUT);
+  digitalWrite(output, LOW);
+  
+  // Start the DS18B20 sensor
+  sensors.begin();
+  
+  // Send web page to client
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send_P(200, "text/html", index_html, processor);
+  });
 
-  // Route for root / web page
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
-            { request->send_P(200, "text/html", index_html, processor); });
-  server.on("/temperaturec", HTTP_GET, [](AsyncWebServerRequest *request)
-            { request->send_P(200, "text/plain", temperatureC.c_str()); });
-  server.on("/temperaturef", HTTP_GET, [](AsyncWebServerRequest *request)
-            { request->send_P(200, "text/plain", temperatureF.c_str()); });
-      // Start server
-      server.begin();
-}
+  // Receive an HTTP GET request at <ESP_IP>/get?threshold_input=<inputMessage>&enable_arm_input=<inputMessage2>
+  server.on("/get", HTTP_GET, [] (AsyncWebServerRequest *request) {
+    // GET threshold_input value on <ESP_IP>/get?threshold_input=<inputMessage>
+    if (request->hasParam(Ps_input) ) {
+      inputMessage = request->getParam(Ps_input)->value();
+      inputParam= Ps_input;
 
-void loop()
-{
-      if ((millis() - lastTime) > timerDelay)
-      {
-        temperatureC = readDSTemperatureC();
-        temperatureF = readDSTemperatureF();
-        lastTime = millis();
+    }
+      // GET enable_arm_input value on <ESP_IP>/get?enable_arm_input=<inputMessage2>
+     else if  (request->hasParam(Comfort_Input)) {
+        inputMessage= request->getParam(Comfort_Input)->value();
+        inputParam== Comfort_Input;
+        
       }
+      else {
+        inputMessage2 = "false";
+        enableArmChecked = "";
+      
+    }
+    Serial.println(inputMessage);
+    Serial.println(inputMessage2);
+    request->send(200, "text/html", "Temperature of " + inputParam+ " is " + inputMessage+ "<br><br><a href=\"/\">Return to Home Page</a>");
+  });
+  server.onNotFound(notFound);
+  server.begin();
 }
 
-
-// sæt input til normal/komfort mode for at sætte værdi for når den er valgt
-//sæt input til spare mode for at sætte værdi for når den er valgt
-// du sætter grænsen for både normal/komfort og spare, ved at indtaste værdierne du ønsker for begge. altså minimum og maximum.
+void loop() {
+  unsigned long currentMillis = millis();
+  if (currentMillis - previousMillis >= interval) {
+    previousMillis = currentMillis;
+    sensors.requestTemperatures();
+    // Temperature in Celsius degrees 
+    float temperature = sensors.getTempCByIndex(0);
+    Serial.print(temperature);
+    Serial.println(" *C");
+    
+    // Temperature in Fahrenheit degrees
+    /*float temperature = sensors.getTempFByIndex(0);
+    Serial.print(temperature);
+    Serial.println(" *F");*/
+    
+    lastTemperature = String(temperature);
+    
+    // Check if temperature is above threshold and if it needs to trigger output
+    if(temperature > inputMessage.toFloat()){
+      String message = String("Temperature above threshold. Current temperature: ") + 
+                            String(temperature) + String("C");
+      Serial.println(message);
+      triggerActive = true;
+      digitalWrite(output, HIGH);
+    }
+    // Check if temperature is below threshold and if it needs to trigger output
+    else if((temperature < inputMessage.toFloat()) ) {
+      String message = String("Temperature below threshold. Current temperature: ") + 
+                            String(temperature) + String(" C");
+      Serial.println(message);
+      triggerActive = false;
+      digitalWrite(output, LOW);
+    }
+  }
+}
